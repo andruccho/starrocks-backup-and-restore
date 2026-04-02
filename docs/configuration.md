@@ -23,6 +23,9 @@ repository: "your_repo_name"
 | `repository` | string | Yes | Repository name (created via `CREATE REPOSITORY`) |
 | `ops_database` | string | No | Custom name for ops database (default: "ops") |
 | `table_inventory` | list | No | Table inventory groups definition (see below) |
+| `minio` | object | No* | S3-compatible storage settings for the `prune` command (see below) |
+
+\*Required fields inside `minio` are validated when the section is present. The **`prune` command requires a `minio` section** in the config file.
 
 **Note:** The `database` field specifies which database contains your tables. The `ops` database is created automatically.
 
@@ -66,7 +69,9 @@ When you run `starrocks-br init`, table inventory is automatically populated fro
 
 ## Password Management
 
-Never store passwords in config files. Use an environment variable:
+Never store passwords in config files. Use environment variables:
+
+### StarRocks database user
 
 **Linux/macOS:**
 ```bash
@@ -82,6 +87,71 @@ $env:STARROCKS_PASSWORD="your_password"
 ```cmd
 set STARROCKS_PASSWORD=your_password
 ```
+
+### MinIO / S3 secret key (prune only)
+
+The `prune` command deletes snapshot objects directly in object storage. Set the same secret you use as `aws.s3.secret_key` (or equivalent) in `CREATE REPOSITORY`:
+
+**Linux/macOS:**
+```bash
+export MINIO_PASSWORD="your_s3_secret_key"
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:MINIO_PASSWORD="your_s3_secret_key"
+```
+
+If `MINIO_PASSWORD` is unset, `prune` exits with an error.
+
+## MinIO and S3-compatible storage for prune
+
+The `prune` command does **not** use `DROP SNAPSHOT` (often unavailable). It removes objects under the path StarRocks uses for each snapshot:
+
+```text
+s3://<bucket>/<path>/__starrocks_repository_<repo_name>/__ss_<backup_label>/
+```
+
+Align `bucket`, `path`, `repo_name`, and `endpoint` with your repository definition. Example repository:
+
+```sql
+CREATE REPOSITORY `minio2`
+WITH BROKER
+ON LOCATION "s3://starrocks1/backup"
+PROPERTIES(
+    "aws.s3.access_key" = "minio",
+    "aws.s3.secret_key" = "<use MINIO_PASSWORD>",
+    "aws.s3.endpoint" = "http://minio.example:9000",
+    "aws.s3.enable_path_style_access" = "true"
+);
+```
+
+Matching `config.yaml` snippet:
+
+```yaml
+repository: "minio2"
+
+minio:
+  repo_name: "minio2"           # must match repository name; alias key: repoName
+  endpoint: "http://minio.example:9000"
+  bucket: "starrocks1"          # bucket from ON LOCATION
+  path: "backup"                # path inside the bucket (empty string "" if none)
+  access_key: "minio"
+```
+
+### MinIO YAML fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `repo_name` | string | Yes | Same as StarRocks repository name (you may use `repoName` instead) |
+| `endpoint` | string | Yes | S3 API base URL, e.g. `http://host:9000` |
+| `bucket` | string | Yes | Bucket name from the repository location |
+| `path` | string | No | Prefix inside the bucket; omit or use `""` for bucket root |
+| `access_key` | string | Yes | S3 access key id |
+
+If `repository` and `minio.repo_name` differ, `prune` logs a warning; object paths always use `minio.repo_name`.
+
+Other commands (`init`, `backup`, `restore`) do not require a `minio` section.
 
 ## TLS/SSL Configuration
 

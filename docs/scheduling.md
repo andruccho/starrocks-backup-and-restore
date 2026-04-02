@@ -24,6 +24,7 @@ crontab -e
 
 **Important:** Remember to:
 - Set `STARROCKS_PASSWORD` environment variable in your cron script
+- For scheduled **`prune`** jobs, also set **`MINIO_PASSWORD`** (S3/MinIO secret key) and ensure `config.yaml` contains the **`minio`** section
 - Activate the virtual environment before running the command
 - Use absolute paths
 
@@ -32,6 +33,7 @@ crontab -e
 ```bash
 #!/bin/bash
 export STARROCKS_PASSWORD="your_password"
+export MINIO_PASSWORD="your_s3_secret_key"   # only if you run prune from this script
 cd /path/to/starrocks-br
 source .venv/bin/activate
 starrocks-br backup full --config config.yaml --group production_tables

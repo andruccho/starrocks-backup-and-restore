@@ -107,9 +107,16 @@ Set your database password as an environment variable (never store passwords in 
 export STARROCKS_PASSWORD="your_password"
 ```
 
+If you will use **`prune`** to remove old backups, also set the object-storage secret (same as `aws.s3.secret_key` in your repository) and add a **`minio`** section to `config.yaml`. See [Configuration Reference](configuration.md#minio-and-s3-compatible-storage-for-prune).
+
+```bash
+export MINIO_PASSWORD="your_s3_secret_key"
+```
+
 On Windows (PowerShell):
 ```powershell
 $env:STARROCKS_PASSWORD="your_password"
+$env:MINIO_PASSWORD="your_s3_secret_key"
 ```
 
 ## Initialize the Tool
@@ -323,6 +330,10 @@ starrocks-br restore \
 - Verify host and port in config.yaml
 - Check that STARROCKS_PASSWORD is set: `echo $STARROCKS_PASSWORD`
 - Ensure StarRocks FE is running
+
+**`prune` fails: missing `minio` or `MINIO_PASSWORD`**
+- Add a **`minio`** section to `config.yaml` (see [Configuration](configuration.md#minio-and-s3-compatible-storage-for-prune))
+- Export **`MINIO_PASSWORD`** with the same secret as `aws.s3.secret_key` in `CREATE REPOSITORY`
 
 **"Table not found in inventory"**
 - Check your inventory: `SELECT * FROM ops.table_inventory WHERE inventory_group = 'your_group';`
