@@ -6,7 +6,11 @@ a = Analysis(
     pathex=['src'],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=[
+        "mysql.connector.locales.eng.client_error",
+        "mysql.connector.plugins.caching_sha2_password",
+        "mysql.connector.plugins.mysql_native_password",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -16,6 +16,12 @@ from typing import Any
 
 import mysql.connector
 
+# mysql-connector loads auth plugins and error locales via importlib; PyInstaller
+# does not trace those. Eager imports keep onefile bundles from missing modules.
+import mysql.connector.locales.eng.client_error  # noqa: F401
+import mysql.connector.plugins.caching_sha2_password  # noqa: F401
+import mysql.connector.plugins.mysql_native_password  # noqa: F401
+
 
 class StarRocksDB:
     """Database connection wrapper for StarRocks."""
@@ -55,6 +61,9 @@ class StarRocksDB:
             "user": self.user,
             "password": self.password,
             "database": self.database,
+            # Pure Python auth avoids loading mysql_native_password.so from the OS
+            # (missing in slim Docker images and incompatible with PyInstaller C ext).
+            "use_pure": True,
         }
 
         if self.tls_config.get("enabled"):
