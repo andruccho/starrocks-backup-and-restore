@@ -28,6 +28,12 @@ def config_file():
         user: "root"
         database: "test_db"
         repository: "test_repo"
+        minio:
+          repo_name: "test_repo"
+          endpoint: "http://localhost:9000"
+          bucket: "test-bucket"
+          path: "backup"
+          access_key: "minio"
         """)
         f.flush()
         config_path = f.name
@@ -54,8 +60,9 @@ def invalid_yaml_file():
 
 @pytest.fixture
 def setup_password_env(monkeypatch):
-    """Setup STARROCKS_PASSWORD environment variable for testing."""
+    """Setup STARROCKS_PASSWORD and MINIO_PASSWORD for tests."""
     monkeypatch.setenv("STARROCKS_PASSWORD", "test_password")
+    monkeypatch.setenv("MINIO_PASSWORD", "test_minio_secret")
 
 
 @pytest.fixture

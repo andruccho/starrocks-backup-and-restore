@@ -320,28 +320,72 @@ class TestVerifySnapshotExists:
             prune.verify_snapshot_exists(mock_db, "test_repo", "backup1")
 
 
+class TestSnapshotS3Prefix:
+    """Tests for StarRocks snapshot path layout on S3-compatible storage."""
+
+    def test_prefix_with_path(self):
+        p = prune.snapshot_s3_prefix(path="backup", repo_name="minio2", snapshot_name="snap_a")
+        assert p == "backup/__starrocks_repository_minio2/__ss_snap_a/"
+
+    def test_prefix_empty_path(self):
+        p = prune.snapshot_s3_prefix(path="", repo_name="r", snapshot_name="s")
+        assert p == "__starrocks_repository_r/__ss_s/"
+
+    def test_prefix_strips_slashes(self):
+        p = prune.snapshot_s3_prefix(path=" /backup/ ", repo_name="r", snapshot_name="s")
+        assert p == "backup/__starrocks_repository_r/__ss_s/"
+
+    def test_rejects_path_in_label(self):
+        with pytest.raises(ValueError, match="path separators"):
+            prune.snapshot_s3_prefix(path="b", repo_name="r", snapshot_name="evil/name")
+
+
 class TestExecuteDropSnapshot:
-    """Unit tests for execute_drop_snapshot function."""
+    """Unit tests for execute_drop_snapshot (S3 delete)."""
 
     def test_drop_snapshot_success(self, mocker):
-        """Test successful snapshot deletion."""
-        mock_db = mocker.Mock()
+        mock_client = mocker.Mock()
+        mock_paginator = mocker.Mock()
+        mock_paginator.paginate.return_value = [
+            {"Contents": [{"Key": "backup/__starrocks_repository_r/__ss_b1/x"}]}
+        ]
+        mock_client.get_paginator.return_value = mock_paginator
+        mock_client.delete_objects.return_value = {"Errors": []}
+        mocker.patch("starrocks_br.prune._s3_client_for_minio", return_value=mock_client)
 
-        prune.execute_drop_snapshot(mock_db, "test_repo", "backup1")
+        prune.execute_drop_snapshot(
+            "b1",
+            endpoint="http://localhost:9000",
+            bucket="starrocks1",
+            path="backup",
+            repo_name="r",
+            access_key="k",
+            secret_key="s",
+        )
 
-        mock_db.execute.assert_called_once()
-        sql = mock_db.execute.call_args[0][0]
-        assert "DROP SNAPSHOT" in sql
-        assert "test_repo" in sql
-        assert "backup1" in sql
+        mock_client.delete_objects.assert_called()
+        kwargs = mock_client.delete_objects.call_args[1]
+        assert kwargs["Bucket"] == "starrocks1"
+        assert len(kwargs["Delete"]["Objects"]) == 1
 
-    def test_drop_snapshot_failure(self, mocker):
-        """Test snapshot deletion failure."""
-        mock_db = mocker.Mock()
-        mock_db.execute.side_effect = Exception("Drop failed")
+    def test_drop_snapshot_propagates_client_error(self, mocker):
+        from botocore.exceptions import ClientError
 
-        with pytest.raises(Exception, match="Drop failed"):
-            prune.execute_drop_snapshot(mock_db, "test_repo", "backup1")
+        mocker.patch(
+            "starrocks_br.prune._s3_client_for_minio",
+            side_effect=ClientError({"Error": {"Code": "x", "Message": "m"}}, "CreateClient"),
+        )
+
+        with pytest.raises(ClientError):
+            prune.execute_drop_snapshot(
+                "b1",
+                endpoint="http://x",
+                bucket="b",
+                path="p",
+                repo_name="r",
+                access_key="k",
+                secret_key="s",
+            )
 
 
 class TestCleanupBackupHistory:
