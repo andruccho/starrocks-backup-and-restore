@@ -731,6 +731,25 @@ def prune_command(config, group, keep_last, older_than, snapshot, snapshots, dry
         cfg = config_module.load_config(config)
         config_module.validate_config(cfg)
 
+        if not cfg.get("minio"):
+            raise exceptions.ConfigValidationError(
+                "The 'prune' command requires a 'minio' section in the configuration file"
+            )
+
+        minio_secret = os.getenv("MINIO_PASSWORD")
+        if not minio_secret:
+            logger.error(
+                "MINIO_PASSWORD environment variable is required for prune (S3 secret key)"
+            )
+            sys.exit(1)
+
+        minio_cfg = config_module.normalize_minio_config(cfg["minio"])
+        if cfg["repository"] != minio_cfg["repo_name"]:
+            logger.warning(
+                f"Config 'repository' ({cfg['repository']!r}) differs from minio.repo_name "
+                f"({minio_cfg['repo_name']!r}); S3 paths use minio.repo_name."
+            )
+
         database = db.StarRocksDB(
             host=cfg["host"],
             port=cfg["port"],
@@ -841,7 +860,15 @@ def prune_command(config, group, keep_last, older_than, snapshot, snapshots, dry
 
             for snap in snapshots_to_delete:
                 try:
-                    prune.execute_drop_snapshot(database, cfg["repository"], snap["label"])
+                    prune.execute_drop_snapshot(
+                        snap["label"],
+                        endpoint=minio_cfg["endpoint"],
+                        bucket=minio_cfg["bucket"],
+                        path=minio_cfg["path"],
+                        repo_name=minio_cfg["repo_name"],
+                        access_key=minio_cfg["access_key"],
+                        secret_key=minio_secret,
+                    )
                     prune.cleanup_backup_history(database, snap["label"], ops_database=ops_database)
                     deleted_count += 1
                 except Exception as e:

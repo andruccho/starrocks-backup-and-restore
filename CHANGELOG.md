@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0a1] - 2026-02-04 (Alpha)
 
-> **Note**: This is an alpha release. The `prune` command requires StarRocks with `DROP SNAPSHOT` support, which is not yet available upstream.
+> **Note**: This is an alpha release. The `prune` command removes snapshot data via **S3-compatible object storage** (configured in `minio` + `MINIO_PASSWORD`), not `DROP SNAPSHOT`.
 
 ### Added
 - **New Command**: `prune` - Manage backup lifecycle with flexible retention policies
@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Group-specific pruning with `--group` filter
   - Dry-run mode (`--dry-run`) to preview deletions before executing
   - Auto-confirmation with `--yes` flag for automation
+  - Deletes snapshot objects under `__starrocks_repository_<repo>/__ss_<label>/` using the S3 API (MinIO-compatible, path-style access)
+  - **`minio`** config section and **`MINIO_PASSWORD`** env for storage credentials
   - Automatically cleans up backup history and partition metadata after deletion
   - Comprehensive documentation with integration testing guide
 - **Test Coverage**: 52 comprehensive tests (31 unit tests + 21 integration tests) for prune command

@@ -215,6 +215,8 @@ LIMIT 10;
 
 Delete old backups to manage repository storage using various pruning strategies.
 
+Snapshot data is removed **directly from S3-compatible storage** (list + delete objects). StarRocks `DROP SNAPSHOT` is not used. You must configure a **`minio`** section in `config.yaml` and set **`MINIO_PASSWORD`** (see [Configuration Reference](configuration.md#minio-and-s3-compatible-storage-for-prune)).
+
 ### Syntax
 
 ```bash
@@ -231,6 +233,11 @@ You must specify exactly ONE of the following strategies:
 | `--older-than TIMESTAMP` | Delete backups older than the specified timestamp |
 | `--snapshot LABEL` | Delete a specific backup by label |
 | `--snapshots LABEL1,LABEL2,...` | Delete multiple specific backups (comma-separated) |
+
+### Prerequisites
+
+- Config file includes a complete **`minio`** block (`endpoint`, `bucket`, `access_key`, `repo_name` or `repoName`, optional `path`).
+- Environment variable **`MINIO_PASSWORD`** is set to the object-storage secret key.
 
 ### Parameters
 
@@ -288,7 +295,8 @@ starrocks-br prune --config config.yaml --keep-last 5 --yes
 2. **Filters by strategy**: Determines which backups to delete based on your chosen strategy
 3. **Shows preview**: Displays what will be deleted (unless `--yes` is used)
 4. **Confirms**: Asks for confirmation (unless `--yes` or `--dry-run`)
-5. **Deletes snapshots**: Executes `DROP SNAPSHOT` for each backup
+5. **Deletes snapshot objects**: For each label, deletes all objects under  
+   `s3://<bucket>/<path>/__starrocks_repository_<repo_name>/__ss_<label>/` via the S3 API (path-style, suitable for MinIO)
 6. **Cleans history**: Removes entries from `ops.backup_history` and `ops.backup_partitions`
 
 ### Finding Backups to Prune
@@ -312,11 +320,13 @@ GROUP BY ti.inventory_group;
 
 ### Important Notes
 
-- **Irreversible**: Pruning permanently deletes backups from the repository
+- **Irreversible**: Pruning permanently deletes backup data in object storage
+- **`--snapshot` / `--snapshots`**: Still uses `SHOW SNAPSHOT` in StarRocks to confirm the label exists before deletion
 - **Group filtering**: Use `--group` to prune only specific backup groups
 - **Dry run first**: Always test with `--dry-run` before actual deletion
 - **Keep-last counts**: Sorted by `finished_at` timestamp (oldest deleted first)
 - **Timestamp format**: Must be `YYYY-MM-DD HH:MM:SS` (24-hour format)
+- **StarRocks metadata**: `SHOW SNAPSHOT` may still list labels until the catalog refreshes; on-disk data under the prefix is what `prune` removes
 
 ### Testing Integration
 
@@ -346,12 +356,11 @@ starrocks-br prune --config config.yaml --keep-last 1 --yes
 
 5. **Verify deletion:**
 ```sql
--- Should only show 1 backup remaining
+-- Should only show 1 backup remaining in ops tracking
 SELECT label FROM ops.backup_history WHERE status = 'FINISHED';
-
--- Verify snapshot was dropped from repository
-SHOW SNAPSHOT ON your_repository;
 ```
+
+Optionally confirm objects are gone in MinIO/S3 (prefix layout is documented in [Configuration](configuration.md#minio-and-s3-compatible-storage-for-prune)). `SHOW SNAPSHOT` in StarRocks may not update immediately after object deletion.
 
 ## Next Steps
 

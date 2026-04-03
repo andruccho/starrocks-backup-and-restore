@@ -89,12 +89,15 @@ table_inventory:
         table: "orders"
 ```
 
-Set password:
+Set passwords and secrets (never put them in `config.yaml`):
+
 ```bash
 export STARROCKS_PASSWORD="your_password"
+# Required only for prune (same value as aws.s3.secret_key in CREATE REPOSITORY):
+export MINIO_PASSWORD="your_s3_secret_key"
 ```
 
-See [Configuration Reference](docs/configuration.md) for TLS and advanced options.
+See [Configuration Reference](docs/configuration.md) for TLS and advanced options; [MinIO and S3 for prune](docs/configuration.md#minio-and-s3-compatible-storage-for-prune) documents the `minio` section and `MINIO_PASSWORD`.
 
 ## Basic Usage
 
@@ -130,8 +133,11 @@ starrocks-br backup incremental --config config.yaml --group production
 starrocks-br restore --config config.yaml --target-label mydb_20251118_full
 ```
 
-**Prune old backups:**
+**Prune old backups** (requires `minio` in config and `MINIO_PASSWORD`; removes snapshot objects in S3/MinIO, not via `DROP SNAPSHOT`):
+
 ```bash
+export MINIO_PASSWORD="your_s3_secret_key"
+
 # Keep only last 5 backups
 starrocks-br prune --config config.yaml --keep-last 5
 
@@ -139,7 +145,7 @@ starrocks-br prune --config config.yaml --keep-last 5
 starrocks-br prune --config config.yaml --older-than "2024-01-01 00:00:00"
 ```
 
-See [Commands Reference](docs/commands.md) for all options.
+See [Commands Reference](docs/commands.md) and [Configuration](docs/configuration.md#minio-and-s3-compatible-storage-for-prune) for all options.
 
 ## How It Works
 

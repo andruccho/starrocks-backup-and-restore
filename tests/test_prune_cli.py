@@ -12,9 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import tempfile
+
 from click.testing import CliRunner
 
 from starrocks_br import cli
+
+# Matches minio section in tests/conftest.py config_file fixture.
+_PRUNE_MINIO_KWARGS = {
+    "endpoint": "http://localhost:9000",
+    "bucket": "test-bucket",
+    "path": "backup",
+    "access_key": "minio",
+    "repo_name": "test_repo",
+    "secret_key": "test_minio_secret",
+}
 
 
 def test_prune_keep_last_success(
@@ -56,8 +69,8 @@ def test_prune_keep_last_success(
 
     # Should delete the oldest 2 snapshots (keeping the last 3)
     assert mock_execute.call_count == 2
-    mock_execute.assert_any_call(mock_db, "test_repo", "backup_20240101")
-    mock_execute.assert_any_call(mock_db, "test_repo", "backup_20240102")
+    mock_execute.assert_any_call("backup_20240101", **_PRUNE_MINIO_KWARGS)
+    mock_execute.assert_any_call("backup_20240102", **_PRUNE_MINIO_KWARGS)
 
     # Should cleanup history for deleted snapshots
     assert mock_cleanup.call_count == 2
@@ -98,8 +111,8 @@ def test_prune_older_than_success(
 
     # Should delete snapshots older than 2024-01-01 12:00:00
     assert mock_execute.call_count == 2
-    mock_execute.assert_any_call(mock_db, "test_repo", "backup_20231201")
-    mock_execute.assert_any_call(mock_db, "test_repo", "backup_20240101")
+    mock_execute.assert_any_call("backup_20231201", **_PRUNE_MINIO_KWARGS)
+    mock_execute.assert_any_call("backup_20240101", **_PRUNE_MINIO_KWARGS)
 
 
 def test_prune_single_snapshot_success(
@@ -135,7 +148,7 @@ def test_prune_single_snapshot_success(
 
     assert result.exit_code == 0
 
-    mock_execute.assert_called_once_with(mock_db, "test_repo", "backup_20240101")
+    mock_execute.assert_called_once_with("backup_20240101", **_PRUNE_MINIO_KWARGS)
     mock_cleanup.assert_called_once()
 
 
@@ -187,9 +200,9 @@ def test_prune_multiple_snapshots_success(
     assert result.exit_code == 0
 
     assert mock_execute.call_count == 3
-    mock_execute.assert_any_call(mock_db, "test_repo", "backup_20240101")
-    mock_execute.assert_any_call(mock_db, "test_repo", "backup_20240102")
-    mock_execute.assert_any_call(mock_db, "test_repo", "backup_20240103")
+    mock_execute.assert_any_call("backup_20240101", **_PRUNE_MINIO_KWARGS)
+    mock_execute.assert_any_call("backup_20240102", **_PRUNE_MINIO_KWARGS)
+    mock_execute.assert_any_call("backup_20240103", **_PRUNE_MINIO_KWARGS)
 
     assert mock_cleanup.call_count == 3
 
@@ -575,10 +588,10 @@ def test_prune_partial_failure_continues_deletion(
 
     call_count = {"count": 0}
 
-    def mock_execute_side_effect(db, repo, snapshot):
+    def mock_execute_side_effect(snapshot_name, *, endpoint, bucket, path, repo_name, access_key, secret_key):
         call_count["count"] += 1
         if call_count["count"] == 2:
-            raise Exception(f"Failed to delete {snapshot}")
+            raise Exception(f"Failed to delete {snapshot_name}")
 
     mock_execute = mocker.patch(
         "starrocks_br.prune.execute_drop_snapshot",
@@ -648,7 +661,7 @@ def test_prune_with_group_filter_keep_last(
 
     # Should only delete the oldest production_tables backup
     assert mock_execute.call_count == 1
-    mock_execute.assert_called_once_with(mock_db, "test_repo", "prod_backup_20240101")
+    mock_execute.assert_called_once_with("prod_backup_20240101", **_PRUNE_MINIO_KWARGS)
 
     # Should NOT touch test_tables backups
     assert "test_backup" not in str(mock_execute.call_args_list)
@@ -710,7 +723,7 @@ def test_prune_with_group_filter_older_than(
 
     # Should only delete old production_tables backup
     assert mock_execute.call_count == 1
-    mock_execute.assert_called_once_with(mock_db, "test_repo", "prod_backup_20231201")
+    mock_execute.assert_called_once_with("prod_backup_20231201", **_PRUNE_MINIO_KWARGS)
 
     # Should NOT touch test_tables backups
     assert "test_backup" not in str(mock_execute.call_args_list)
@@ -767,8 +780,8 @@ def test_prune_without_group_affects_all_backups(
     assert result.exit_code == 0
 
     assert mock_execute.call_count == 2
-    mock_execute.assert_any_call(mock_db, "test_repo", "prod_backup_20240101")
-    mock_execute.assert_any_call(mock_db, "test_repo", "test_backup_20240102")
+    mock_execute.assert_any_call("prod_backup_20240101", **_PRUNE_MINIO_KWARGS)
+    mock_execute.assert_any_call("test_backup_20240102", **_PRUNE_MINIO_KWARGS)
 
 
 def test_prune_group_not_found(
@@ -795,3 +808,56 @@ def test_prune_group_not_found(
     )
 
     assert result.exit_code == 0
+
+
+def test_prune_requires_minio_section_in_config(
+    mock_db,
+    mock_initialized_schema,
+    mock_healthy_cluster,
+    mock_repo_exists,
+    setup_password_env,
+):
+    """prune exits when minio block is missing from config."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("""
+        host: "127.0.0.1"
+        port: 9030
+        user: "root"
+        database: "test_db"
+        repository: "test_repo"
+        """)
+        f.flush()
+        path = f.name
+
+    try:
+        runner = CliRunner()
+        result = runner.invoke(
+            cli.prune_command,
+            ["--config", path, "--keep-last", "1", "--yes"],
+        )
+        assert result.exit_code != 0
+        combined = result.output + (result.stderr or "")
+        assert "minio" in combined.lower()
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def test_prune_requires_minio_password_env(
+    config_file,
+    mock_db,
+    mock_initialized_schema,
+    mock_healthy_cluster,
+    mock_repo_exists,
+    monkeypatch,
+):
+    """prune exits when MINIO_PASSWORD is unset."""
+    monkeypatch.setenv("STARROCKS_PASSWORD", "test_password")
+    monkeypatch.delenv("MINIO_PASSWORD", raising=False)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.prune_command,
+        ["--config", config_file, "--keep-last", "1", "--yes"],
+    )
+    assert result.exit_code == 1

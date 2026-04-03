@@ -14,7 +14,72 @@
 
 from datetime import datetime
 
+import boto3
+from botocore.config import Config as BotoConfig
+from botocore.exceptions import BotoCoreError, ClientError
+
 from . import logger
+
+
+def snapshot_s3_prefix(*, path: str, repo_name: str, snapshot_name: str) -> str:
+    """Build S3 key prefix for a StarRocks repository snapshot on MinIO/S3."""
+    _validate_snapshot_label_for_storage(snapshot_name)
+    base = path.strip().strip("/")
+    repo_dir = f"__starrocks_repository_{repo_name}"
+    snap_dir = f"__ss_{snapshot_name}"
+    if base:
+        return f"{base}/{repo_dir}/{snap_dir}/"
+    return f"{repo_dir}/{snap_dir}/"
+
+
+def _validate_snapshot_label_for_storage(snapshot_name: str) -> None:
+    if not snapshot_name:
+        raise ValueError("Snapshot name must not be empty")
+    if any(c in snapshot_name for c in ("/", "\\")) or ".." in snapshot_name:
+        raise ValueError(
+            f"Invalid snapshot label for object storage deletion: {snapshot_name!r} "
+            "(must not contain path separators)"
+        )
+
+
+def _s3_client_for_minio(*, endpoint: str, access_key: str, secret_key: str):
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+        region_name="us-east-1",
+    )
+
+
+def _delete_s3_prefix(client, bucket: str, prefix: str) -> int:
+    """Delete all objects under prefix. Returns number of objects deleted."""
+    paginator = client.get_paginator("list_objects_v2")
+    deleted = 0
+    batch: list[dict] = []
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            batch.append({"Key": obj["Key"]})
+            if len(batch) >= 1000:
+                _flush_delete_batch(client, bucket, batch)
+                deleted += len(batch)
+                batch = []
+
+    if batch:
+        _flush_delete_batch(client, bucket, batch)
+        deleted += len(batch)
+
+    return deleted
+
+
+def _flush_delete_batch(client, bucket: str, objects: list[dict]) -> None:
+    resp = client.delete_objects(Bucket=bucket, Delete={"Objects": objects})
+    for err in resp.get("Errors", []):
+        raise RuntimeError(
+            f"S3 delete failed for {err.get('Key')}: {err.get('Code')} — {err.get('Message')}"
+        )
 
 
 def get_successful_backups(
@@ -168,23 +233,52 @@ def verify_snapshot_exists(db, repository: str, snapshot_name: str) -> bool:
         raise
 
 
-def execute_drop_snapshot(db, repository: str, snapshot_name: str) -> None:
-    """Execute DROP SNAPSHOT command for a single snapshot.
+def execute_drop_snapshot(
+    snapshot_name: str,
+    *,
+    endpoint: str,
+    bucket: str,
+    path: str,
+    repo_name: str,
+    access_key: str,
+    secret_key: str,
+) -> None:
+    """Delete snapshot data from MinIO/S3 (StarRocks may not support DROP SNAPSHOT).
+
+    Removes all objects under:
+    ``s3://<bucket>/<path>/__starrocks_repository_<repo_name>/__ss_<snapshot_name>/``
 
     Args:
-        db: Database connection
-        repository: Repository name
-        snapshot_name: Snapshot name to delete
+        snapshot_name: Backup label / snapshot name
+        endpoint: S3 API endpoint URL (e.g. ``http://minio:9000``)
+        bucket: Bucket name from the repository location
+        path: Path prefix inside the bucket (may be empty for bucket root)
+        repo_name: Same as the StarRocks repository name
+        access_key: S3 access key id
+        secret_key: S3 secret key (typically from ``MINIO_PASSWORD``)
 
     Raises:
-        Exception if deletion fails
+        ValueError: Invalid snapshot label
+        ClientError, BotoCoreError, RuntimeError: Storage deletion failures
     """
-    sql = f"DROP SNAPSHOT ON {repository} WHERE SNAPSHOT = '{snapshot_name}'"
+    prefix = snapshot_s3_prefix(path=path, repo_name=repo_name, snapshot_name=snapshot_name)
 
     try:
-        logger.info(f"Deleting snapshot: {snapshot_name}")
-        db.execute(sql)
-        logger.success(f"Successfully deleted snapshot: {snapshot_name}")
+        logger.info(f"Deleting snapshot objects from s3://{bucket}/{prefix}: {snapshot_name}")
+        client = _s3_client_for_minio(
+            endpoint=endpoint, access_key=access_key, secret_key=secret_key
+        )
+        count = _delete_s3_prefix(client, bucket, prefix)
+        if count == 0:
+            logger.warning(
+                f"No objects found at s3://{bucket}/{prefix} for snapshot '{snapshot_name}'"
+            )
+        else:
+            logger.info(f"Removed {count} object(s) for snapshot '{snapshot_name}'")
+        logger.success(f"Successfully deleted snapshot data: {snapshot_name}")
+    except (ClientError, BotoCoreError) as e:
+        logger.error(f"Failed to delete snapshot '{snapshot_name}' from object storage: {e}")
+        raise
     except Exception as e:
         logger.error(f"Failed to delete snapshot '{snapshot_name}': {e}")
         raise

@@ -58,6 +58,37 @@ def validate_config(config: dict[str, Any]) -> None:
 
     _validate_tls_section(config.get("tls"))
     _validate_table_inventory_section(config.get("table_inventory"))
+    _validate_minio_section(config.get("minio"))
+
+
+def minio_repo_name(minio: dict[str, Any]) -> str:
+    """Resolve repository name from minio config (supports repo_name or repoName)."""
+    name = minio.get("repo_name") or minio.get("repoName")
+    if not name or not isinstance(name, str):
+        raise exceptions.ConfigValidationError(
+            "minio configuration requires 'repo_name' (or 'repoName') as a non-empty string"
+        )
+    return name
+
+
+def normalize_minio_config(minio: dict[str, Any]) -> dict[str, str]:
+    """Return minio settings for S3 clients (prune). Does not include secret key."""
+    _validate_minio_section(minio)
+    path_val = minio.get("path")
+    if path_val is None:
+        path_str = ""
+    elif not isinstance(path_val, str):
+        raise exceptions.ConfigValidationError("minio 'path' must be a string if provided")
+    else:
+        path_str = path_val
+
+    return {
+        "endpoint": str(minio["endpoint"]),
+        "bucket": str(minio["bucket"]),
+        "path": path_str,
+        "access_key": str(minio["access_key"]),
+        "repo_name": minio_repo_name(minio),
+    }
 
 
 def get_ops_database(config: dict[str, Any]) -> str:
@@ -116,6 +147,25 @@ def _validate_tls_section(tls_config) -> None:
             raise exceptions.ConfigValidationError(
                 "TLS configuration field 'tls_versions' must be a list of strings if provided"
             )
+
+
+def _validate_minio_section(minio_config) -> None:
+    if minio_config is None:
+        return
+
+    if not isinstance(minio_config, dict):
+        raise exceptions.ConfigValidationError("'minio' configuration must be a dictionary")
+
+    minio_repo_name(minio_config)
+
+    for field in ("endpoint", "bucket", "access_key"):
+        if field not in minio_config:
+            raise exceptions.ConfigValidationError(f"minio configuration requires '{field}'")
+        if not isinstance(minio_config[field], str) or not str(minio_config[field]).strip():
+            raise exceptions.ConfigValidationError(f"minio '{field}' must be a non-empty string")
+
+    if "path" in minio_config and not isinstance(minio_config["path"], str):
+        raise exceptions.ConfigValidationError("minio 'path' must be a string if provided")
 
 
 def _validate_table_inventory_section(table_inventory) -> None:

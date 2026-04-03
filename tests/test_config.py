@@ -403,3 +403,73 @@ def test_should_reject_invalid_table_inventory_config(table_inventory, expected_
 
     with pytest.raises(exceptions.ConfigValidationError, match=expected_error):
         config.validate_config(cfg)
+
+
+def test_should_validate_minio_section_when_present():
+    cfg = {
+        "host": "127.0.0.1",
+        "port": 9030,
+        "user": "root",
+        "database": "test_db",
+        "repository": "test_repo",
+        "minio": {
+            "repo_name": "test_repo",
+            "endpoint": "http://localhost:9000",
+            "bucket": "b",
+            "path": "backup",
+            "access_key": "k",
+        },
+    }
+    config.validate_config(cfg)
+
+
+def test_should_accept_alternate_repo_name_key_in_minio():
+    cfg = {
+        "host": "127.0.0.1",
+        "port": 9030,
+        "user": "root",
+        "database": "test_db",
+        "repository": "test_repo",
+        "minio": {
+            "repoName": "test_repo",
+            "endpoint": "http://localhost:9000",
+            "bucket": "b",
+            "path": "",
+            "access_key": "k",
+        },
+    }
+    config.validate_config(cfg)
+    norm = config.normalize_minio_config(cfg["minio"])
+    assert norm["repo_name"] == "test_repo"
+    assert norm["path"] == ""
+
+
+@pytest.mark.parametrize(
+    "minio_cfg,err",
+    [
+        ("x", "must be a dictionary"),
+        (
+            {"endpoint": "http://x", "bucket": "b", "access_key": "k"},
+            "repo_name",
+        ),
+        (
+            {
+                "repo_name": "r",
+                "bucket": "b",
+                "access_key": "k",
+            },
+            "requires 'endpoint'",
+        ),
+    ],
+)
+def test_should_reject_invalid_minio_section(minio_cfg, err):
+    cfg = {
+        "host": "127.0.0.1",
+        "port": 9030,
+        "user": "root",
+        "database": "test_db",
+        "repository": "test_repo",
+        "minio": minio_cfg,
+    }
+    with pytest.raises(exceptions.ConfigValidationError, match=err):
+        config.validate_config(cfg)
